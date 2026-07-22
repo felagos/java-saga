@@ -3,8 +3,8 @@
 Versión monolítica del mismo checkout de e-commerce implementado en `main` como 6 microservicios
 orquestados por SAGA sobre NATS. Acá es **un solo proceso Spring Boot (`saga/`), una sola base de
 datos** — pero sigue usando el **patrón saga con compensación explícita**: cada paso (crear
-pedido, reservar stock, cobrar, sumar puntos, generar envío) commitea su propio cambio de
-inmediato, y si uno falla, se compensan los pasos anteriores en orden LIFO. La diferencia con
+pedido, reservar stock, cobrar, generar envío) commitea su propio cambio de inmediato, y si uno
+falla, se compensan los pasos anteriores en orden LIFO. La diferencia con
 `main` no es "sin saga" — es "saga sin red": nada de NATS, Outbox, idempotencia ni servicios
 separados; todo son llamadas directas a método dentro del mismo proceso.
 
@@ -29,14 +29,14 @@ separado por red ni por base):
 
 ```
 saga/src/main/java/com/saga/
-├── BffApplication.java
-├── bff/
+├── CheckoutApplication.java
+├── checkout/
 │   ├── application/CheckoutUseCase.java   orquestador único: pasos + pila de compensaciones LIFO
+│   ├── orchestrator/                      SagaStep, SagaOrchestrator (motor genérico de saga)
 │   └── web/                               CheckoutController, DTOs, manejador de excepciones
 ├── orders/      {domain, application, infrastructure/persistence}
 ├── inventory/   {domain, application, infrastructure/persistence}
 ├── payments/    {domain, application, infrastructure/persistence}
-├── loyalty/     {domain, application, infrastructure/persistence}
 └── shipping/    {domain, application, infrastructure/persistence}
 ```
 
@@ -53,8 +53,7 @@ curl -s -X POST localhost:8080/checkout -H "Content-Type: application/json" \
 ```
 
 Diagramas de todos los flujos (happy path + los 3 casos de fallo, con la cadena de compensación
-LIFO paso a paso): **[FLOWS.md](FLOWS.md)**. Detalle de arranque y variables de simulación de
-fallos: **[RUN.md](RUN.md)**. Comandos de desarrollo y arquitectura para trabajar en el código:
-**[CLAUDE.md](CLAUDE.md)**.
+LIFO paso a paso): **[FLOWS.md](FLOWS.md)**. Comandos de desarrollo y arquitectura para trabajar
+en el código: **[CLAUDE.md](CLAUDE.md)**.
 
 Para comparar contra la versión microservicios (SAGA sobre NATS): `git checkout main`.
