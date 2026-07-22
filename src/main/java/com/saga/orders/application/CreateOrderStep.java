@@ -5,7 +5,8 @@ import com.saga.orders.domain.Order;
 
 /**
  * Per-checkout adapter, not a Spring bean: it carries request state (the inputs, then the
- * created Order) so compensate() and the downstream ConfirmOrderStep can use the result.
+ * created Order). Last step in the saga: the order is born CONFIRMED directly, so nothing runs
+ * after it that can fail and there is nothing to compensate.
  */
 public class CreateOrderStep implements SagaStep {
 
@@ -33,7 +34,7 @@ public class CreateOrderStep implements SagaStep {
 
     @Override
     public void compensate() {
-        orderService.cancel(order);
+        // Intentionally empty: the last step in the saga has nothing after it that can fail.
     }
 
     public Order order() {

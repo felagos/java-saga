@@ -4,11 +4,9 @@ import com.saga.inventory.application.InventoryService;
 import com.saga.inventory.application.ReserveStockStep;
 import com.saga.checkout.orchestrator.SagaOrchestrator;
 import com.saga.checkout.orchestrator.SagaStep;
-import com.saga.orders.application.ConfirmOrderStep;
 import com.saga.orders.application.CreateOrderStep;
 import com.saga.orders.application.OrderService;
 import com.saga.orders.domain.Order;
-import com.saga.orders.domain.OrderStatus;
 import com.saga.payments.application.ChargePaymentStep;
 import com.saga.payments.application.PaymentService;
 import com.saga.shipping.application.GenerateShippingStep;
@@ -43,15 +41,14 @@ public class CheckoutUseCase {
     public Order checkout(String customerId, String productId, int quantity, double amount) {
         CreateOrderStep createOrder = new CreateOrderStep(orderService, customerId, productId, quantity, amount);
         List<SagaStep> steps = List.of(
-                createOrder,
                 new ReserveStockStep(inventoryService, productId, quantity),
                 new ChargePaymentStep(paymentService, customerId, amount),
                 new GenerateShippingStep(shippingService, productId),
-                new ConfirmOrderStep(orderService, createOrder)
+                createOrder
         );
 
         sagaOrchestrator.run(steps);
 
-        return createOrder.order().withStatus(OrderStatus.CONFIRMED);
+        return createOrder.order();
     }
 }

@@ -7,8 +7,11 @@ Todos los flujos que puede ejecutar el saga de checkout — definido en `Checkou
 diferencia de `main` (microservicios sobre NATS), acá todo es in-process: cada flecha sólida es
 una llamada directa a método Java (commitea su propia transacción local al retornar), cada
 flecha punteada es el valor de retorno. No hay red, no hay async — el pedido completo pasa en
-una sola request HTTP síncrona. El comportamiento externo (lo que muestran los diagramas de
-abajo) no cambió con ese refactor — solo cambió *dónde* vive la mecánica LIFO (ver §6).
+una sola request HTTP síncrona.
+
+Orden de pasos: la orden nace **CONFIRMED directamente, como último paso**, recién
+después de que el pago (el paso más propenso a fallar) tuvo éxito. Así nunca existe una orden en
+un estado intermedio ("fantasma") — si algo falla antes, no hay ninguna orden que compensar.
 
 ## Índice
 
@@ -25,11 +28,6 @@ Orden fijo en que `CheckoutUseCase.checkout()` llama a los servicios. Si cualqui
 excepción, no se sigue avanzando — se pasa directo a compensar lo que ya se ejecutó.
 
 ```
-          ┌─────────────┐
-          │ CreateOrder │
-          └─────────────┘
-                 │
-                 ▼
          ┌──────────────┐
          │ ReserveStock │
          └──────────────┘
@@ -40,169 +38,125 @@ excepción, no se sigue avanzando — se pasa directo a compensar lo que ya se e
          └───────────────┘
                  │
                  ▼
-      ┌────────────────────┐
-      │ GrantLoyaltyPoints │
-      └────────────────────┘
-                 │
-                 ▼
        ┌──────────────────┐
        │ GenerateShipping │
        └──────────────────┘
                  │
                  ▼
-         ┌──────────────┐
-         │ ConfirmOrder │
-         └──────────────┘
+          ┌─────────────┐
+          │ CreateOrder │
+          └─────────────┘
 ```
 
 ## 2. Happy path
 
-Los 5 pasos tienen éxito; `CheckoutUseCase` nunca acumula nada que compensar y responde
-`CONFIRMED` en la misma request.
+Los 4 pasos tienen éxito; `CheckoutUseCase` nunca acumula nada que compensar y responde
+`CONFIRMED` en la misma request. La orden recién existe en el último paso, ya `CONFIRMED`.
 
 ```
-  Cliente           Checkout           Orders           Inventory           Payments           Loyalty           Shipping
-     │                  │                 │                 │                   │                 │                  │
+  Cliente           Checkout           Inventory           Payments           Shipping           Orders
+     │                  │                 │                   │                  │                 │
      |--POST /checkout-->
-     │                  │                 │                 │                   │                 │                  │
-                        |----create()----->
-     │                  │                 │                 │                   │                 │                  │
-                        < -Order PENDING- |
-     │                  │                 │                 │                   │                 │                  │
-                        |-------------reserve()------------->
-     │                  │                 │                 │                   │                 │                  │
-                        < - - - - - - - -ok - - - - - - - - |
-     │                  │                 │                 │                   │                 │                  │
-                        |-----------------------charge()------------------------>
-     │                  │                 │                 │                   │                 │                  │
-                        < - - - - - - - - - -Payment CHARGED- - - - - - - - - - |
-     │                  │                 │                 │                   │                 │                  │
-                        |---------------------------------grant()--------------------------------->
-     │                  │                 │                 │                   │                 │                  │
-                        < - - - - - - - - - - - - - - -LoyaltyGrant - - - - - - - - - - - - - - - |
-     │                  │                 │                 │                   │                 │                  │
-                        |-----------------------------------------generate()----------------------------------------->
-     │                  │                 │                 │                   │                 │                  │
-                        < - - - - - - - - - - - - - - - - - - Shipment GENERATED- - - - - - - - - - - - - - - - - - -|
-     │                  │                 │                 │                   │                 │                  │
-                        |----confirm()---->
-     │                  │                 │                 │                   │                 │                  │
-                        < - - - ok- - - - |
-     │                  │                 │                 │                   │                 │                  │
+     │                  │                 │                   │                  │                 │
+                        |----reserve()---->
+     │                  │                 │                   │                  │                 │
+                        < - - - -ok - - - |
+     │                  │                 │                   │                  │                 │
+                        |----------------------charge()------->
+     │                  │                 │                   │                  │                 │
+                        < - - - - - - -Payment CHARGED- - - - |
+     │                  │                 │                   │                  │                 │
+                        |--------------------------------generate()------------->
+     │                  │                 │                   │                  │                 │
+                        < - - - - - - - - - - -Shipment GENERATED- - - - - - - - |
+     │                  │                 │                   │                  │                 │
+                        |------------------------------------------------create()---------------->
+     │                  │                 │                   │                  │                 │
+                        < - - - - - - - - - - - - - - - - - - -Order CONFIRMED- - - - - - - - - - -|
+     │                  │                 │                   │                  │                 │
      < -200 CONFIRMED- -|
-     │                  │                 │                 │                   │                 │                  │
+     │                  │                 │                   │                  │                 │
 ```
 
 ## 3. Caso A — sin stock
 
-`ReserveStock` es el primer paso que puede fallar (pedí `quantity` > stock sembrado). Solo hay
-una compensación: deshacer `CreateOrder`, lo único que ya había tenido efecto.
+`ReserveStock` es el primer paso y también el primero que puede fallar (pedí `quantity` > stock
+sembrado). Ningún paso anterior tuvo efecto todavía, así que no hay nada que compensar — ni
+siquiera existe una orden.
 
 ```
-  Cliente                   Checkout                   Orders                   Inventory
-     │                          │                         │                         │
+  Cliente                   Checkout                   Inventory
+     │                          │                         │
      |------POST /checkout------>
-     │                          │                         │                         │
-                                |--------create()--------->
-     │                          │                         │                         │
-                                < - - -Order PENDING- - - |
-     │                          │                         │                         │
-                                |---------------------reserve()--------------------->
-     │                          │                         │                         │
-                                < - - - - - -InsufficientStockException - - - - - - |
-     │                          │                         │                         │
-                                |--cancel()  [compensa]--->
-     │                          │                         │                         │
-                                < - - - - - ok- - - - - - |
-     │                          │                         │                         │
+     │                          │                         │
+                                |--------reserve()-------->
+     │                          │                         │
+                                < - - -InsufficientStockException- - - |
+     │                          │                         │
      < -409 Insufficient stock -|
-     │                          │                         │                         │
+     │                          │                         │
 ```
 
 ## 4. Caso B — pago rechazado
 
-`CreateOrder` y `ReserveStock` ya tuvieron éxito cuando `ChargePayment` falla
-(`payments.simulate.reject=true`). Compensación LIFO: primero se deshace lo más reciente
-(`release()` sobre inventory), después lo más viejo (`cancel()` sobre el pedido).
+`ReserveStock` ya tuvo éxito cuando `ChargePayment` falla (`payments.simulate.reject=true`).
+Compensación LIFO: solo hay un paso previo exitoso, `release()` sobre inventory. Ninguna orden
+llegó a crearse.
 
 ```
-  Cliente                     Checkout                     Orders                     Inventory                     Payments
-     │                            │                           │                           │                             │
+  Cliente                     Checkout                     Inventory                     Payments
+     │                            │                           │                             │
      |-------POST /checkout------->
-     │                            │                           │                           │                             │
-                                  |---------create()---------->
-     │                            │                           │                           │                             │
-                                  < - - - Order PENDING - - - |
-     │                            │                           │                           │                             │
-                                  |-----------------------reserve()----------------------->
-     │                            │                           │                           │                             │
-                                  < - - - - - - - - - - - - -ok - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │
-                                  |--------------------------------------charge()--------------------------------------->
-     │                            │                           │                           │                             │
-                                  < - - - - - - - - - - - - - - -PaymentRejectedException - - - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │
-                                  |---------------release()  [compensa #1]---------------->
-     │                            │                           │                           │                             │
-                                  < - - - - - - - - - - - - -ok - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │
-                                  |--cancel()  [compensa #2]-->
-     │                            │                           │                           │                             │
+     │                            │                           │                             │
+                                  |------reserve()------------>
+     │                            │                           │                             │
                                   < - - - - - -ok - - - - - - |
-     │                            │                           │                           │                             │
+     │                            │                           │                             │
+                                  |--------------------------charge()------------------------>
+     │                            │                           │                             │
+                                  < - - - - - - - - - -PaymentRejectedException - - - - - - -|
+     │                            │                           │                             │
+                                  |--release()  [compensa #1]->
+     │                            │                           │                             │
+                                  < - - - - - -ok - - - - - - |
+     │                            │                           │                             │
      < - -409 Payment rejected - -|
-     │                            │                           │                           │                             │
+     │                            │                           │                             │
 ```
 
 ## 5. Caso C — falla el envío
 
-Los primeros 4 pasos tienen éxito; `GenerateShipping` falla
-(`shipping.simulate.fail=true`). Cadena completa de compensación LIFO — 4 pasos, en el orden
-inverso exacto al que se ejecutaron:
+Los primeros 2 pasos tienen éxito; `GenerateShipping` falla (`shipping.simulate.fail=true`).
+Compensación LIFO — 2 pasos, en el orden inverso exacto al que se ejecutaron. Ninguna orden
+llegó a crearse porque `CreateOrder` es el último paso, nunca alcanzado.
 
 ```
-  Cliente                     Checkout                     Orders                     Inventory                     Payments                     Loyalty                     Shipping
-     │                            │                           │                           │                             │                           │                            │
+  Cliente                     Checkout                     Inventory                     Payments                     Shipping
+     │                            │                           │                             │                            │
      |-------POST /checkout------->
-     │                            │                           │                           │                             │                           │                            │
-                                  |---------create()---------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - Order PENDING - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |-----------------------reserve()----------------------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - -ok - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |--------------------------------------charge()--------------------------------------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - - - - - - Payment CHARGED - - - - - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |-----------------------------------------------------grant()----------------------------------------------------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - - - - - - - - - - - - - -LoyaltyGrant - - - - - - - - - - - - - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |------------------------------------------------------------------generate()------------------------------------------------------------------>
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ShippingFailedException - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -|
-     │                            │                           │                           │                             │                           │                            │
-                                  |---------------------------------------------revert()  [compensa #1]--------------------------------------------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - - - - - - - - - - - - - - - - ok- - - - - - - - - - - - - - - - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |-------------------------------refund()  [compensa #2]------------------------------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - - - - - - - - - ok- - - - - - - - - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |---------------release()  [compensa #3]---------------->
-     │                            │                           │                           │                             │                           │                            │
-                                  < - - - - - - - - - - - - -ok - - - - - - - - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
-                                  |--cancel()  [compensa #4]-->
-     │                            │                           │                           │                             │                           │                            │
+     │                            │                           │                             │                            │
+                                  |------reserve()------------>
+     │                            │                           │                             │                            │
                                   < - - - - - -ok - - - - - - |
-     │                            │                           │                           │                             │                           │                            │
+     │                            │                           │                             │                            │
+                                  |--------------------------charge()------------------------>
+     │                            │                           │                             │                            │
+                                  < - - - - - - - - - -Payment CHARGED - - - - - - - - - - - |
+     │                            │                           │                             │                            │
+                                  |------------------------------------------generate()------------------------------->
+     │                            │                           │                             │                            │
+                                  < - - - - - - - - - - - - - - - - -ShippingFailedException - - - - - - - - - - - - -|
+     │                            │                           │                             │                            │
+                                  |---------------------------refund()  [compensa #1]-------->
+     │                            │                           │                             │                            │
+                                  < - - - - - - - - - -ok - - - - - - - - - - - - - - - - - -|
+     │                            │                           │                             │                            │
+                                  |--release()  [compensa #2]->
+     │                            │                           │                             │                            │
+                                  < - - - - - -ok - - - - - - |
+     │                            │                           │                             │                            │
      < - -409 Shipping failed- - -|
-     │                            │                           │                           │                             │                           │                            │
+     │                            │                           │                             │                            │
 ```
 
 Nota: no hay reintento acá — a diferencia de `main`, donde `GenerateShipping` reintenta con
@@ -212,23 +166,21 @@ backoff antes de rendirse (paso "pivote"), en esta rama cualquier fallo compensa
 
 | # | `SagaStep` | Paquete | `execute()` llama a | `compensate()` llama a |
 |---|---|---|---|---|
-| 1 | `CreateOrderStep` | `orders.application` | `orderService.create(...)` | `orderService.cancel(order)` |
-| 2 | `ReserveStockStep` | `inventory.application` | `inventoryService.reserve(productId, qty)` | `inventoryService.release(productId, qty)` |
-| 3 | `ChargePaymentStep` | `payments.application` | `paymentService.charge(...)` | `paymentService.refund(payment)` |
-| 4 | `GrantLoyaltyPointsStep` | `loyalty.application` | `loyaltyService.grant(...)` | `loyaltyService.revert(grant)` |
-| 5 | `GenerateShippingStep` | `shipping.application` | `shippingService.generate(productId)` | `shippingService.cancel(shipment)` |
-| 6 | `ConfirmOrderStep` | `orders.application` | `orderService.confirm(order)` | (ninguna — último paso, nada corre después que pueda fallar) |
+| 1 | `ReserveStockStep` | `inventory.application` | `inventoryService.reserve(productId, qty)` | `inventoryService.release(productId, qty)` |
+| 2 | `ChargePaymentStep` | `payments.application` | `paymentService.charge(...)` | `paymentService.refund(payment)` |
+| 3 | `GenerateShippingStep` | `shipping.application` | `shippingService.generate(productId)` | `shippingService.cancel(shipment)` |
+| 4 | `CreateOrderStep` | `orders.application` | `orderService.create(...)` (nace `CONFIRMED`) | (ninguna — último paso, nada corre después que pueda fallar) |
 
 Cada `*Step` es un adaptador chico (no un bean de Spring — carga estado por-request) que delega
 en el `*Service` de su dominio y guarda el resultado en un campo para que `compensate()` lo use
-después. `CheckoutUseCase.checkout()` arma estos 6 objetos en orden en un `List<SagaStep>` y se
+después. `CheckoutUseCase.checkout()` arma estos 4 objetos en orden en un `List<SagaStep>` y se
 lo pasa a `SagaOrchestrator.run(steps)`, que es donde vive la mecánica LIFO en sí: empuja cada
 paso a un `Deque` apenas su `execute()` tiene éxito; si cualquiera lanza `RuntimeException`,
 corre `compensate()` sobre ese deque (LIFO — el más reciente primero) y re-lanza la excepción
 original, que `CheckoutExceptionHandler` mapea a `409`. El paso que falló nunca se agrega al
-deque, así que nunca se compensa a sí mismo (ver el trace de `ChargePaymentStep` fallando en
-el caso B, §4: se compensan `ReserveStockStep` y `CreateOrderStep` — los dos que sí habían
-tenido éxito — nunca `ChargePaymentStep` mismo).
+deque, así que nunca se compensa a sí mismo (ver el trace de `GenerateShippingStep` fallando en
+el caso C, §5: se compensan `ChargePaymentStep` y `ReserveStockStep` — los dos que sí habían
+tenido éxito — nunca `GenerateShippingStep` mismo).
 
 `SagaOrchestrator` no sabe nada de checkout específicamente — serviría para cualquier lista de
 `SagaStep`, no solo esta. La definición de *qué* pasos y en qué orden vive únicamente en

@@ -15,14 +15,6 @@ public class OrderService {
     }
 
     public Order create(String customerId, String productId, int quantity, double amount) {
-        return orderRepository.save(new Order(null, customerId, productId, quantity, amount, OrderStatus.PENDING));
-    }
-
-    public void confirm(Order order) {
-        orderRepository.save(order.withStatus(OrderStatus.CONFIRMED));
-    }
-
-    public void cancel(Order order) {
-        orderRepository.save(order.withStatus(OrderStatus.CANCELLED));
+        return orderRepository.save(new Order(null, customerId, productId, quantity, amount, OrderStatus.CONFIRMED));
     }
 }
