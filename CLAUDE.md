@@ -54,12 +54,12 @@ generic `orchestrator/` engine.
   never pushed, so it never compensates itself. This class has no domain knowledge at all — it
   would work for any saga, not just checkout.
 - `checkout/application/CheckoutUseCase.java` — defines *this* saga: builds the steps in order
-  (`CreateOrderStep`, `ReserveStockStep`, `ChargePaymentStep`, `GenerateShippingStep`,
-  `ConfirmOrderStep`) fresh on every call (they carry per-request state) and hands the list to
-  `SagaOrchestrator.run(...)`. `ConfirmOrderStep` is the one step that depends on another step's
-  result (the `Order` `CreateOrderStep` created) — it takes that step directly in its constructor
-  rather than through a shared context object; nothing else in this saga has a cross-step
-  dependency, so don't introduce a context object for a problem that doesn't exist yet.
+  (`ReserveStockStep`, `ChargePaymentStep`, `GenerateShippingStep`, `CreateOrderStep`) fresh on
+  every call (they carry per-request state) and hands the list to `SagaOrchestrator.run(...)`.
+  `CreateOrderStep` runs **last**, after payment — per `IDEA.md`, the order is born `CONFIRMED`
+  directly, so a failed step earlier in the chain never has an order to compensate. No step in
+  this saga has a cross-step dependency (nothing needs another step's result), so don't introduce
+  a shared context object for a problem that doesn't exist.
 - `checkout/web/CheckoutController.java` — `POST /checkout` is synchronous: it returns the final
   `CONFIRMED` result or an error in the same HTTP response. There is no `GET /saga/{id}` — a
   synchronous in-process call has no async state to poll.
@@ -67,12 +67,13 @@ generic `orchestrator/` engine.
   (`InsufficientStockException`, `PaymentRejectedException`, `ShippingFailedException`) to a 409
   with a reason. By the time one reaches here, `SagaOrchestrator` has already run compensation
   for every step that succeeded before the one that threw.
-- Each domain's `application/*Service` exposes both the forward action and its compensation as
-  plain methods (`OrderService.create`/`cancel`, `InventoryService.reserve`/`release`,
-  `PaymentService.charge`/`refund`, `ShippingService.generate`/`cancel`) — no envelope, no
-  command type string, no NATS subject. The `*Step` classes call these directly and hold the
-  returned domain object (`Order`, `Payment`, `Shipment`) in a field so `compensate()` has what it
-  needs (id, current state).
+- Each domain's `application/*Service` exposes the forward action as a plain method
+  (`InventoryService.reserve`, `PaymentService.charge`, `ShippingService.generate`,
+  `OrderService.create`) plus a compensation for the three that need one (`release`, `refund`,
+  `cancel`) — no envelope, no command type string, no NATS subject. `OrderService.create` has no
+  compensation: `CreateOrderStep` is the last step in the saga, so it's never compensated. The
+  `*Step` classes call these directly and hold the returned domain object (`Payment`, `Shipment`)
+  in a field so `compensate()` has what it needs (id, current state).
 - Each domain's `infrastructure/persistence/entity/` holds its JPA `@Entity`; repository ports
   live in `domain/`, adapters/mappers/Spring Data repositories in `infrastructure/persistence/`.
   Adapters that support compensation (payments, shipping — orders/inventory already had this)
@@ -93,7 +94,7 @@ Same idea as `main`, no gateway/warehouse integration — `application.yml` flag
 
 ### Adding a new step to the checkout
 
-Add the domain package (same 3-layer shape as the existing 5) with a forward method and a
+Add the domain package (same 3-layer shape as the existing 4) with a forward method and a
 compensation method on its application service, then a `SagaStep` implementation in that
 package's `application/` folder (constructor takes the service plus whatever inputs it needs;
 store the `execute()` result in a field if `compensate()` needs it — see any existing `*Step` for
