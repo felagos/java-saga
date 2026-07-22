@@ -1,6 +1,6 @@
 package com.saga.orders.application;
 
-import com.saga.bff.orchestrator.SagaStep;
+import com.saga.checkout.orchestrator.SagaStep;
 import com.saga.orders.domain.Order;
 
 /**

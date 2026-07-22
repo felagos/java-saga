@@ -1,4 +1,4 @@
-package com.saga.bff.orchestrator;
+package com.saga.checkout.orchestrator;
 
 import org.springframework.stereotype.Component;
 

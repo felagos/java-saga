@@ -1,6 +1,6 @@
-package com.saga.bff.web;
+package com.saga.checkout.web;
 
-import com.saga.bff.application.CheckoutUseCase;
+import com.saga.checkout.application.CheckoutUseCase;
 import com.saga.orders.domain.Order;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;

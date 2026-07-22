@@ -31,4 +31,4 @@ shipping:
 
 logging:
   level:
-    com.saga.bff: INFO
+    com.saga.checkout: INFO

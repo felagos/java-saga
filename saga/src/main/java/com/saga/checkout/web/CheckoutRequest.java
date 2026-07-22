@@ -1,4 +1,4 @@
-package com.saga.bff.web;
+package com.saga.checkout.web;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;

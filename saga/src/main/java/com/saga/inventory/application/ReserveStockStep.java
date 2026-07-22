@@ -1,6 +1,6 @@
 package com.saga.inventory.application;
 
-import com.saga.bff.orchestrator.SagaStep;
+import com.saga.checkout.orchestrator.SagaStep;
 
 /** Per-checkout adapter, not a Spring bean: carries the request's productId/quantity. */
 public class ReserveStockStep implements SagaStep {

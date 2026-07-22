@@ -1,9 +1,9 @@
-package com.saga.bff.application;
+package com.saga.checkout.application;
 
 import com.saga.inventory.application.InventoryService;
 import com.saga.inventory.application.ReserveStockStep;
-import com.saga.bff.orchestrator.SagaOrchestrator;
-import com.saga.bff.orchestrator.SagaStep;
+import com.saga.checkout.orchestrator.SagaOrchestrator;
+import com.saga.checkout.orchestrator.SagaStep;
 import com.saga.orders.application.ConfirmOrderStep;
 import com.saga.orders.application.CreateOrderStep;
 import com.saga.orders.application.OrderService;

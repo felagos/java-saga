@@ -1,6 +1,6 @@
 package com.saga.payments.application;
 
-import com.saga.bff.orchestrator.SagaStep;
+import com.saga.checkout.orchestrator.SagaStep;
 import com.saga.payments.domain.Payment;
 
 /** Per-checkout adapter, not a Spring bean: carries the created Payment for compensate(). */

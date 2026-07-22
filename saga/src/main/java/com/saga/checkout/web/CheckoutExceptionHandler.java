@@ -1,4 +1,4 @@
-package com.saga.bff.web;
+package com.saga.checkout.web;
 
 import com.saga.inventory.domain.InsufficientStockException;
 import com.saga.payments.domain.PaymentRejectedException;

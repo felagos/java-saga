@@ -1,4 +1,4 @@
-package com.saga.bff.web;
+package com.saga.checkout.web;
 
 public record CheckoutResponse(Long orderId, String status) {
 }

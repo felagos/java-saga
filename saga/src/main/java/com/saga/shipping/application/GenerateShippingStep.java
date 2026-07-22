@@ -1,6 +1,6 @@
 package com.saga.shipping.application;
 
-import com.saga.bff.orchestrator.SagaStep;
+import com.saga.checkout.orchestrator.SagaStep;
 import com.saga.shipping.domain.Shipment;
 
 /** Per-checkout adapter, not a Spring bean: carries the created Shipment for compensate(). */
