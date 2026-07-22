@@ -1,4 +1,4 @@
-package com.saga.orchestrator;
+package com.saga.bff.orchestrator;
 
 public interface SagaStep {
 

@@ -1,6 +1,6 @@
 package com.saga.orders.application;
 
-import com.saga.orchestrator.SagaStep;
+import com.saga.bff.orchestrator.SagaStep;
 
 /**
  * Per-checkout adapter, not a Spring bean. Last step in the saga: nothing runs after it, so
