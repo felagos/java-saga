@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is (branch `monolith`)
 
 This branch is a monolithic rewrite of the same checkout business capability implemented as 6
-SAGA-orchestrated microservices on `main`. One Spring Boot process (`saga/`), one MariaDB
+SAGA-orchestrated microservices on `main`. One Spring Boot process (this repo root), one MariaDB
 database — but it still runs the **SAGA pattern with explicit compensation**, just in-process:
 each step commits its own local transaction immediately (plain JPA save, no enclosing
 `@Transactional`), and if a step fails, the compensations of the steps that already succeeded run
@@ -21,20 +21,19 @@ concepts back into this branch, that's genuinely not needed without network call
 make up                       # docker compose -f docker-compose.full.yml up -d --build (mariadb + bff)
 make infra-up                 # mariadb only, for local bootRun
 
-cd saga && ./gradlew compileJava
-cd saga && ./gradlew test
-cd saga && ./gradlew test --tests "com.saga.checkout.orchestrator.SagaOrchestratorTest"
-cd saga && ./gradlew bootRun
+./gradlew compileJava
+./gradlew test
+./gradlew test --tests "com.saga.checkout.orchestrator.SagaOrchestratorTest"
+./gradlew bootRun
 ```
 
-There is exactly one Gradle project, directory `saga/` (root project name `saga`) — do not look
-for the other 5 projects that exist on `main`; they were deleted on this branch. The Docker
-Compose service is still named `bff` (matches `CheckoutApplication`/`CheckoutController`), only
-the directory is `saga/`.
+There is exactly one Gradle project, at the repo root (project name `saga`) — do not look for the
+other 5 projects that exist on `main`; they were deleted on this branch. The Docker Compose
+service is still named `bff` (matches `CheckoutApplication`/`CheckoutController`).
 
 ## Architecture
 
-`saga/src/main/java/com/saga/` has one package per former microservice — `orders/`, `inventory/`,
+`src/main/java/com/saga/` has one package per former microservice — `orders/`, `inventory/`,
 `payments/`, `shipping/` — as **siblings** of `checkout/` (not nested inside it), each with its
 own `domain/application/infrastructure/persistence/entity`. Same hexagonal shape as the
 microservices on `main`, just called via direct Java method calls instead of NATS, sharing one

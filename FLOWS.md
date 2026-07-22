@@ -1,9 +1,9 @@
 # Flujos del checkout — rama `monolith`
 
 Todos los flujos que puede ejecutar el saga de checkout — definido en `CheckoutUseCase`
-(`saga/src/main/java/com/saga/bff/application/CheckoutUseCase.java`) como una lista ordenada de
-`SagaStep` (`saga/src/main/java/com/saga/orchestrator/SagaStep.java`), ejecutada por
-`SagaOrchestrator` (`.../orchestrator/SagaOrchestrator.java`) — con diagramas de secuencia. A
+(`src/main/java/com/saga/checkout/application/CheckoutUseCase.java`) como una lista ordenada de
+`SagaStep` (`src/main/java/com/saga/checkout/orchestrator/SagaStep.java`), ejecutada por
+`SagaOrchestrator` (`.../checkout/orchestrator/SagaOrchestrator.java`) — con diagramas de secuencia. A
 diferencia de `main` (microservicios sobre NATS), acá todo es in-process: cada flecha sólida es
 una llamada directa a método Java (commitea su propia transacción local al retornar), cada
 flecha punteada es el valor de retorno. No hay red, no hay async — el pedido completo pasa en
@@ -234,6 +234,6 @@ tenido éxito — nunca `ChargePaymentStep` mismo).
 `SagaStep`, no solo esta. La definición de *qué* pasos y en qué orden vive únicamente en
 `CheckoutUseCase`.
 
-Fuente única de este archivo: `saga/src/main/java/com/saga/orchestrator/SagaOrchestrator.java`
-(mecánica LIFO) y `saga/src/main/java/com/saga/bff/application/CheckoutUseCase.java` (los pasos
+Fuente única de este archivo: `src/main/java/com/saga/checkout/orchestrator/SagaOrchestrator.java`
+(mecánica LIFO) y `src/main/java/com/saga/checkout/application/CheckoutUseCase.java` (los pasos
 y su orden).

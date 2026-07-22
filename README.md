@@ -1,7 +1,7 @@
 # java-saga — rama `monolith`
 
 Versión monolítica del mismo checkout de e-commerce implementado en `main` como 6 microservicios
-orquestados por SAGA sobre NATS. Acá es **un solo proceso Spring Boot (`saga/`), una sola base de
+orquestados por SAGA sobre NATS. Acá es **un solo proceso Spring Boot (raíz de este repo), una sola base de
 datos** — pero sigue usando el **patrón saga con compensación explícita**: cada paso (crear
 pedido, reservar stock, cobrar, generar envío) commitea su propio cambio de inmediato, y si uno
 falla, se compensan los pasos anteriores en orden LIFO. La diferencia con
@@ -23,12 +23,12 @@ separados; todo son llamadas directas a método dentro del mismo proceso.
 
 ## Estructura
 
-Un solo proyecto Gradle, `saga/`. Cada antiguo microservicio es un paquete hermano bajo
+Un solo proyecto Gradle en la raíz del repo. Cada antiguo microservicio es un paquete hermano bajo
 `com.saga`, con su propio domain/application/infrastructure (mismo estilo hexagonal, ya no
 separado por red ni por base):
 
 ```
-saga/src/main/java/com/saga/
+src/main/java/com/saga/
 ├── CheckoutApplication.java
 ├── checkout/
 │   ├── application/CheckoutUseCase.java   orquestador único: pasos + pila de compensaciones LIFO
