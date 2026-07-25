@@ -19,14 +19,32 @@ public class PaymentService {
     }
 
     public Payment confirm(Payment payment) {
+        if (payment.status() == PaymentStatus.CHARGED) {
+            return payment;
+        }
+        if (payment.status() != PaymentStatus.PENDING) {
+            throw new IllegalStateException("Cannot charge payment " + payment.id() + " from status " + payment.status());
+        }
         return paymentRepository.save(payment.withStatus(PaymentStatus.CHARGED));
     }
 
     public Payment reject(Payment payment) {
+        if (payment.status() == PaymentStatus.REJECTED) {
+            return payment;
+        }
+        if (payment.status() != PaymentStatus.PENDING) {
+            throw new IllegalStateException("Cannot reject payment " + payment.id() + " from status " + payment.status());
+        }
         return paymentRepository.save(payment.withStatus(PaymentStatus.REJECTED));
     }
 
     public void refund(Payment payment) {
+        if (payment.status() == PaymentStatus.REFUNDED) {
+            return;
+        }
+        if (payment.status() != PaymentStatus.CHARGED) {
+            throw new IllegalStateException("Cannot refund payment " + payment.id() + " from status " + payment.status());
+        }
         paymentRepository.save(payment.withStatus(PaymentStatus.REFUNDED));
     }
 

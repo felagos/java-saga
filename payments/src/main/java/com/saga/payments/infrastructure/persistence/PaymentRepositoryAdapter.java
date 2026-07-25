@@ -26,7 +26,7 @@ public class PaymentRepositoryAdapter implements PaymentRepository {
         PaymentEntity entity = jpaRepository.findById(payment.id())
                 .orElseThrow(() -> new PaymentNotFoundException(payment.id()));
         entity.setStatus(payment.status());
-        return mapper.toDomain(entity);
+        return mapper.toDomain(jpaRepository.save(entity));
     }
 
     @Override

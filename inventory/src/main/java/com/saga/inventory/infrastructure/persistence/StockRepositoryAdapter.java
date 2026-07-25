@@ -25,10 +25,9 @@ public class StockRepositoryAdapter implements StockRepository {
 
     @Override
     public void save(Stock stock) {
-        // Update the managed entity in place instead of merging a fresh instance,
-        // so the @Version field reflects the row actually read in this transaction.
-        StockEntity entity = jpaRepository.findById(stock.productId())
+         StockEntity entity = jpaRepository.findById(stock.productId())
                 .orElseGet(() -> jpaRepository.save(mapper.toEntity(stock)));
         entity.setAvailableQuantity(stock.availableQuantity());
+        jpaRepository.save(entity);
     }
 }

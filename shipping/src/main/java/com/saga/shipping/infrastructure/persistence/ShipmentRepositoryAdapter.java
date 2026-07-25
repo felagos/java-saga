@@ -26,6 +26,6 @@ public class ShipmentRepositoryAdapter implements ShipmentRepository {
         ShipmentEntity entity = jpaRepository.findById(shipment.id())
                 .orElseThrow(() -> new ShipmentNotFoundException(shipment.id()));
         entity.setStatus(shipment.status());
-        return mapper.toDomain(entity);
+        return mapper.toDomain(jpaRepository.save(entity));
     }
 }

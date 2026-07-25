@@ -26,7 +26,7 @@ public class OrderRepositoryAdapter implements OrderRepository {
         OrderEntity entity = jpaRepository.findById(order.id())
                 .orElseThrow(() -> new OrderNotFoundException(order.id()));
         entity.setStatus(order.status());
-        return mapper.toDomain(entity);
+        return mapper.toDomain(jpaRepository.save(entity));
     }
 
     @Override

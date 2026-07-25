@@ -20,11 +20,25 @@ public class OrderService {
     }
 
     public Order confirm(Long orderId) {
-        return orderRepository.save(orderRepository.findById(orderId).withStatus(OrderStatus.CONFIRMED));
+        Order order = orderRepository.findById(orderId);
+        if (order.status() == OrderStatus.CONFIRMED) {
+            return order;
+        }
+        if (order.status() != OrderStatus.PENDING_PAYMENT) {
+            throw new IllegalStateException("Cannot confirm order " + orderId + " from status " + order.status());
+        }
+        return orderRepository.save(order.withStatus(OrderStatus.CONFIRMED));
     }
 
     public Order cancel(Long orderId) {
-        return orderRepository.save(orderRepository.findById(orderId).withStatus(OrderStatus.CANCELLED));
+        Order order = orderRepository.findById(orderId);
+        if (order.status() == OrderStatus.CANCELLED) {
+            return order;
+        }
+        if (order.status() != OrderStatus.PENDING_PAYMENT) {
+            throw new IllegalStateException("Cannot cancel order " + orderId + " from status " + order.status());
+        }
+        return orderRepository.save(order.withStatus(OrderStatus.CANCELLED));
     }
 
     public Order findById(Long orderId) {

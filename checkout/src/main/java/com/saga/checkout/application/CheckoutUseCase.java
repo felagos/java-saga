@@ -42,12 +42,14 @@ public class CheckoutUseCase {
     public CheckoutInitiation checkout(String customerId, String productId, int quantity, double amount) {
         inventoryService.reserve(productId, quantity);
 
+        Order order = null;
+        Payment payment = null;
         try {
-            Order order = orderService.createPending(customerId, productId, quantity, amount);
+            order = orderService.createPending(customerId, productId, quantity, amount);
             auditService.record(order.id(), "STOCK_RESERVED", "SUCCESS", "Reserved " + quantity + " of " + productId);
             auditService.record(order.id(), "ORDER_CREATED", "SUCCESS", "Order created as PENDING_PAYMENT");
 
-            Payment payment = paymentService.initiate(order.id(), customerId, amount);
+            payment = paymentService.initiate(order.id(), customerId, amount);
             auditService.record(order.id(), "PAYMENT_INITIATED", "SUCCESS", "Payment " + payment.id() + " handed to gateway");
 
             eventPublisher.publish(SagaSubjects.PAYMENT_INITIATED,
@@ -55,7 +57,20 @@ public class CheckoutUseCase {
 
             return new CheckoutInitiation(order.id(), payment.id(), order.status());
         } catch (RuntimeException e) {
+            if (payment != null) {
+                paymentService.reject(payment);
+                auditService.record(order.id(), "PAYMENT_INITIATED", "COMPENSATED",
+                        "Payment " + payment.id() + " rejected after checkout failure");
+            }
+            if (order != null) {
+                orderService.cancel(order.id());
+                auditService.record(order.id(), "ORDER_CREATED", "COMPENSATED", "Order cancelled after checkout failure");
+            }
             inventoryService.release(productId, quantity);
+            if (order != null) {
+                auditService.record(order.id(), "STOCK_RESERVED", "COMPENSATED",
+                        "Released " + quantity + " of " + productId + " after checkout failure");
+            }
             throw new CheckoutInitiationException(e);
         }
     }
