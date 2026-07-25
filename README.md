@@ -1,43 +1,40 @@
-# java-saga — rama `monolith`
+# java-saga — rama `monolith-async-payment`
 
-Versión monolítica del mismo checkout de e-commerce implementado en `main` como 6 microservicios
-orquestados por SAGA sobre NATS. Acá es **un solo proceso Spring Boot (raíz de este repo), una sola base de
-datos** — pero sigue usando el **patrón saga con compensación explícita**: cada paso (crear
-pedido, reservar stock, cobrar, generar envío) commitea su propio cambio de inmediato, y si uno
-falla, se compensan los pasos anteriores en orden LIFO. La diferencia con
-`main` no es "sin saga" — es "saga sin red": nada de NATS, Outbox, idempotencia ni servicios
-separados; todo son llamadas directas a método dentro del mismo proceso.
+Parte de `monolith` (checkout de e-commerce como un solo proceso Spring Boot, una sola base
+MariaDB, patrón SAGA con compensación explícita, todo in-process) y le cambia una sola cosa: el
+**cobro del pago pasa a ser asíncrono**. En la vida real, un gateway de pago no siempre resuelve al
+instante — puede tardar horas y avisar el resultado después, vía callback. Reservar stock, generar
+envío y confirmar la orden siguen siendo síncronos.
 
-## Qué cambia respecto a `main`
+## Qué cambia respecto a `monolith`
 
-- **Un solo proceso, una sola base** en vez de 6 servicios + 6 bases — las compensaciones son
-  llamadas a método Java directas, no comandos NATS con reply async.
-- **`POST /checkout` es síncrono**: responde el resultado final (éxito o motivo de error) en la
-  misma request. No hay `sagaId` para hacer `GET /saga/{id}` — no hace falta, no hay latencia de
-  red entre pasos que justifique un estado consultable aparte.
-- **Sin forward-recovery de Shipping**: en `main`, un fallo de `GenerateShipping` se reintenta
-  con backoff antes de rendirse. Acá cualquier fallo (incluido Shipping) compensa de inmediato —
-  reintentar dentro de una request HTTP síncrona no es buena práctica.
-- **Sin Outbox ni idempotencia de mensaje**: no hay mensajería que pueda reentregar un comando
-  duplicado, así que no hace falta la guarda de duplicados que sí necesita cada microservicio.
+- **`POST /checkout` ya no espera el resultado final**: responde `202 Accepted` con
+  `{orderId, paymentId, status: "PENDING_PAYMENT"}` apenas el stock se reserva y el cobro se
+  inicia con el gateway — no cuando se sabe si fue aprobado.
+- **El resultado del pago llega por un segundo request**: `POST /payments/{paymentId}/callback
+  {"approved": true|false}` simula el webhook del gateway (no hay gateway real en esta rama, se
+  llama a mano o desde un test). Ahí se retoma el saga: si se aprobó, se genera el envío y se
+  confirma la orden; si se rechazó, se libera el stock y se cancela la orden.
+- **Nuevo `GET /orders/{orderId}`** para consultar el estado mientras el pago está pendiente — ya
+  no aplica el "no hace falta polling" de `monolith`, ahora sí hay un estado intermedio que
+  consultar.
+- **Sin threads ni colas propias**: el desacople async se logra con dos requests HTTP
+  independientes, no con `@Async`/executors ni mensajería. El estado que la segunda request
+  necesita para retomar (`productId`, `quantity`, `orderId`) ya vive en las entidades `Order` y
+  `Payment` — no hay una tabla nueva de "estado de saga".
+- **Multi-módulo Gradle**: cada paso del saga es su propio subproyecto (`orders`, `inventory`,
+  `payments`, `shipping`), más `orchestrator` (el motor genérico `SagaStep`/`SagaOrchestrator`) y
+  `checkout` (el único módulo ejecutable — web + `CheckoutUseCase` + `CheckoutApplication`).
 
 ## Estructura
 
-Un solo proyecto Gradle en la raíz del repo. Cada antiguo microservicio es un paquete hermano bajo
-`com.saga`, con su propio domain/application/infrastructure (mismo estilo hexagonal, ya no
-separado por red ni por base):
-
 ```
-src/main/java/com/saga/
-├── CheckoutApplication.java
-├── checkout/
-│   ├── application/CheckoutUseCase.java   orquestador único: pasos + pila de compensaciones LIFO
-│   ├── orchestrator/                      SagaStep, SagaOrchestrator (motor genérico de saga)
-│   └── web/                               CheckoutController, DTOs, manejador de excepciones
-├── orders/      {domain, application, infrastructure/persistence}
-├── inventory/   {domain, application, infrastructure/persistence}
-├── payments/    {domain, application, infrastructure/persistence}
-└── shipping/    {domain, application, infrastructure/persistence}
+orchestrator/  {SagaStep, SagaOrchestrator — motor genérico, sin conocimiento de dominio}
+orders/        {domain, application, infrastructure/persistence}
+inventory/     {domain, application, infrastructure/persistence}
+payments/      {domain, application, infrastructure/persistence}
+shipping/      {domain, application, infrastructure/persistence}
+checkout/      {CheckoutApplication, application/CheckoutUseCase, web/}
 ```
 
 ## Quick start
@@ -47,13 +44,18 @@ make up      # build + levanta MariaDB y bff
 ```
 
 ```bash
+# Fase 1 — inicia el checkout, responde sin esperar el pago
 curl -s -X POST localhost:8080/checkout -H "Content-Type: application/json" \
   -d '{"customerId":"cust-1","productId":"sku-1","quantity":1,"amount":100.0}'
-# -> 200 { "orderId": 1, "status": "CONFIRMED" }
+# -> 202 { "orderId": 1, "paymentId": 1, "status": "PENDING_PAYMENT" }
+
+# Fase 2 — simula el webhook del gateway, horas después
+curl -s -X POST localhost:8080/payments/1/callback -H "Content-Type: application/json" \
+  -d '{"approved": true}'
+
+curl -s localhost:8080/orders/1
+# -> { "orderId": 1, "status": "CONFIRMED" }
 ```
 
-Diagramas de todos los flujos (happy path + los 3 casos de fallo, con la cadena de compensación
-LIFO paso a paso): **[FLOWS.md](FLOWS.md)**. Comandos de desarrollo y arquitectura para trabajar
-en el código: **[CLAUDE.md](CLAUDE.md)**.
-
-Para comparar contra la versión microservicios (SAGA sobre NATS): `git checkout main`.
+Para comparar contra el diseño 100% síncrono: `git checkout monolith`. Para comparar contra la
+versión microservicios (SAGA sobre NATS): `git checkout main`.

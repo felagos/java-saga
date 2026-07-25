@@ -1,1 +1,3 @@
 rootProject.name = 'saga'
+
+include 'shared', 'orders', 'inventory', 'payments', 'shipping', 'checkout'

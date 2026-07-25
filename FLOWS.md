@@ -1,191 +1,158 @@
-# Flujos del checkout — rama `monolith`
+# Flujos del checkout — rama `monolith-async-payment`
 
-Todos los flujos que puede ejecutar el saga de checkout — definido en `CheckoutUseCase`
-(`src/main/java/com/saga/checkout/application/CheckoutUseCase.java`) como una lista ordenada de
-`SagaStep` (`src/main/java/com/saga/checkout/orchestrator/SagaStep.java`), ejecutada por
-`SagaOrchestrator` (`.../checkout/orchestrator/SagaOrchestrator.java`) — con diagramas de secuencia. A
-diferencia de `main` (microservicios sobre NATS), acá todo es in-process: cada flecha sólida es
-una llamada directa a método Java (commitea su propia transacción local al retornar), cada
-flecha punteada es el valor de retorno. No hay red, no hay async — el pedido completo pasa en
-una sola request HTTP síncrona.
-
-Orden de pasos: la orden nace **CONFIRMED directamente, como último paso**, recién
-después de que el pago (el paso más propenso a fallar) tuvo éxito. Así nunca existe una orden en
-un estado intermedio ("fantasma") — si algo falla antes, no hay ninguna orden que compensar.
+El saga de checkout ahora cruza dos requests HTTP independientes, separadas por el tiempo que
+tarde el gateway de pago en resolver el cobro (simulado acá con un callback manual). Definido en
+`CheckoutUseCase` (`checkout/src/main/java/com/saga/checkout/application/CheckoutUseCase.java`):
+`checkout(...)` es la fase 1 (síncrona), `handlePaymentResult(...)` es la fase 2 (disparada por el
+callback). Cada flecha sólida sigue siendo una llamada directa a método Java dentro del mismo
+proceso — la única red real en este diagrama es el propio HTTP entre cliente/gateway y el server.
 
 ## Índice
 
 1. [Pipeline de pasos](#1-pipeline-de-pasos)
 2. [Happy path](#2-happy-path)
-3. [Caso A — sin stock](#3-caso-a--sin-stock)
-4. [Caso B — pago rechazado](#4-caso-b--pago-rechazado)
-5. [Caso C — falla el envío](#5-caso-c--falla-el-envío)
+3. [Caso A — sin stock (fase 1)](#3-caso-a--sin-stock-fase-1)
+4. [Caso B — pago rechazado (fase 2)](#4-caso-b--pago-rechazado-fase-2)
+5. [Caso C — falla el envío (fase 2, post-aprobación)](#5-caso-c--falla-el-envío-fase-2-post-aprobación)
 6. [Tabla: paso → compensación](#6-tabla-paso--compensación)
 
 ## 1. Pipeline de pasos
 
-Orden fijo en que `CheckoutUseCase.checkout()` llama a los servicios. Si cualquiera lanza
-excepción, no se sigue avanzando — se pasa directo a compensar lo que ya se ejecutó.
-
 ```
+  Fase 1 (POST /checkout, síncrona)
          ┌──────────────┐
          │ ReserveStock │
          └──────────────┘
                  │
                  ▼
-         ┌───────────────┐
-         │ ChargePayment │
-         └───────────────┘
+       ┌───────────────────┐
+       │ CreatePendingOrder │
+       └───────────────────┘
                  │
                  ▼
        ┌──────────────────┐
-       │ GenerateShipping │
+       │ InitiatePayment  │  -> responde 202 PENDING_PAYMENT
        └──────────────────┘
+
+  ...horas después...
+
+  Fase 2 (POST /payments/{id}/callback, dispara handlePaymentResult)
                  │
-                 ▼
-          ┌─────────────┐
-          │ CreateOrder │
-          └─────────────┘
+        approved?│
+        ┌────────┴────────┐
+        │no                │sí
+        ▼                  ▼
+  ┌───────────┐   ┌──────────────────┐
+  │ Compensar │   │ GenerateShipping │
+  │ (release  │   └──────────────────┘
+  │ + cancel) │             │
+  └───────────┘             ▼
+                    ┌─────────────┐
+                    │ ConfirmOrder│
+                    └─────────────┘
 ```
 
 ## 2. Happy path
 
-Los 4 pasos tienen éxito; `CheckoutUseCase` nunca acumula nada que compensar y responde
-`CONFIRMED` en la misma request. La orden recién existe en el último paso, ya `CONFIRMED`.
+```
+  Cliente        Checkout        Inventory        Orders        Payments
+     │               │               │               │              │
+     |-POST /checkout->
+     │               │               │               │              │
+                     |--reserve()---->
+                     < - - -ok- - - -|
+                     |------------------createPending()------------->
+                     < - - - - - - - -Order PENDING_PAYMENT- - - - -|
+                     |------------------------------------initiate()------------>
+                     < - - - - - - - - - - - - -Payment PENDING- - - - - - - - -|
+     < -202 PENDING_PAYMENT- - - - - -|
+     │               │               │               │              │
+     ...horas después, el gateway llama al callback...
+     │               │               │               │              │
+     |-POST /payments/1/callback {approved:true}------------------->|
+                     |<-------------------------------handlePaymentResult(1, true)
+                     |----------------------------------------------confirm()---->
+                     < - - - - - - - - - - - - - - - -Payment CHARGED- - - - - -|
+                     |---generate()----> (Shipping, no mostrado arriba)
+                     < - - -ok- - - - -|
+                     |------------------confirm(orderId)------------->
+                     < - - - - - - - -Order CONFIRMED- - - - - - - -|
+     < -200 (ack al gateway)- - - - - |
+     │               │               │               │              │
+```
+
+## 3. Caso A — sin stock (fase 1)
+
+Igual que en `monolith`: `ReserveStock` falla antes de crear orden o pago — nada que compensar,
+ninguna orden ni pago llegaron a existir.
 
 ```
-  Cliente           Checkout           Inventory           Payments           Shipping           Orders
-     │                  │                 │                   │                  │                 │
+  Cliente          Checkout          Inventory
+     │                 │                 │
      |--POST /checkout-->
-     │                  │                 │                   │                  │                 │
-                        |----reserve()---->
-     │                  │                 │                   │                  │                 │
-                        < - - - -ok - - - |
-     │                  │                 │                   │                  │                 │
-                        |----------------------charge()------->
-     │                  │                 │                   │                  │                 │
-                        < - - - - - - -Payment CHARGED- - - - |
-     │                  │                 │                   │                  │                 │
-                        |--------------------------------generate()------------->
-     │                  │                 │                   │                  │                 │
-                        < - - - - - - - - - - -Shipment GENERATED- - - - - - - - |
-     │                  │                 │                   │                  │                 │
-                        |------------------------------------------------create()---------------->
-     │                  │                 │                   │                  │                 │
-                        < - - - - - - - - - - - - - - - - - - -Order CONFIRMED- - - - - - - - - - -|
-     │                  │                 │                   │                  │                 │
-     < -200 CONFIRMED- -|
-     │                  │                 │                   │                  │                 │
+                       |--reserve()------>
+                       < - -InsufficientStockException- - |
+     < -409 Insufficient stock- - - - - -|
 ```
 
-## 3. Caso A — sin stock
+## 4. Caso B — pago rechazado (fase 2)
 
-`ReserveStock` es el primer paso y también el primero que puede fallar (pedí `quantity` > stock
-sembrado). Ningún paso anterior tuvo efecto todavía, así que no hay nada que compensar — ni
-siquiera existe una orden.
-
-```
-  Cliente                   Checkout                   Inventory
-     │                          │                         │
-     |------POST /checkout------>
-     │                          │                         │
-                                |--------reserve()-------->
-     │                          │                         │
-                                < - - -InsufficientStockException- - - |
-     │                          │                         │
-     < -409 Insufficient stock -|
-     │                          │                         │
-```
-
-## 4. Caso B — pago rechazado
-
-`ReserveStock` ya tuvo éxito cuando `ChargePayment` falla (`payments.simulate.reject=true`).
-Compensación LIFO: solo hay un paso previo exitoso, `release()` sobre inventory. Ninguna orden
-llegó a crearse.
+Fase 1 tuvo éxito: hay `Order PENDING_PAYMENT` y `Payment PENDING`. El callback llega con
+`approved:false` — se compensa lo que fase 1 dejó pendiente. El cliente original de `/checkout` ya
+recibió su `202` hace rato; nadie HTTP espera el resultado de esta compensación salvo el propio
+gateway (que solo necesita el ack del callback).
 
 ```
-  Cliente                     Checkout                     Inventory                     Payments
-     │                            │                           │                             │
-     |-------POST /checkout------->
-     │                            │                           │                             │
-                                  |------reserve()------------>
-     │                            │                           │                             │
-                                  < - - - - - -ok - - - - - - |
-     │                            │                           │                             │
-                                  |--------------------------charge()------------------------>
-     │                            │                           │                             │
-                                  < - - - - - - - - - -PaymentRejectedException - - - - - - -|
-     │                            │                           │                             │
-                                  |--release()  [compensa #1]->
-     │                            │                           │                             │
-                                  < - - - - - -ok - - - - - - |
-     │                            │                           │                             │
-     < - -409 Payment rejected - -|
-     │                            │                           │                             │
+  Gateway              Checkout              Inventory              Orders              Payments
+     │                    │                     │                     │                    │
+     |-POST /callback {approved:false}--------------------------------------------------->|
+                         |<---------------------------------------------handlePaymentResult(id, false)
+                         |------------------------------------------------------------reject()->
+                         < - - - - - - - - - - - - - - - - - - - - - - -Payment REJECTED- - - -|
+                         |--release()----------->
+                         < - - -ok- - - - - - - -|
+                         |------------------cancel(orderId)---------->
+                         < - - - - - - - -Order CANCELLED- - - - - - |
+     < -200 (ack)- - - - |
 ```
 
-## 5. Caso C — falla el envío
+## 5. Caso C — falla el envío (fase 2, post-aprobación)
 
-Los primeros 2 pasos tienen éxito; `GenerateShipping` falla (`shipping.simulate.fail=true`).
-Compensación LIFO — 2 pasos, en el orden inverso exacto al que se ejecutaron. Ninguna orden
-llegó a crearse porque `CreateOrder` es el último paso, nunca alcanzado.
+El callback llega con `approved:true`, el pago se confirma (`CHARGED`), pero
+`GenerateShipping` falla (`shipping.simulate.fail=true`). El sub-saga
+`SagaOrchestrator.run([GenerateShipping, ConfirmOrder])` no tiene nada que compensar en su propio
+deque (`GenerateShipping` nunca se pushea, `ConfirmOrder` nunca corre) — pero `CheckoutUseCase`
+compensa lo que quedó *fuera* de ese sub-saga: el pago ya cobrado y el stock ya reservado.
 
 ```
-  Cliente                     Checkout                     Inventory                     Payments                     Shipping
-     │                            │                           │                             │                            │
-     |-------POST /checkout------->
-     │                            │                           │                             │                            │
-                                  |------reserve()------------>
-     │                            │                           │                             │                            │
-                                  < - - - - - -ok - - - - - - |
-     │                            │                           │                             │                            │
-                                  |--------------------------charge()------------------------>
-     │                            │                           │                             │                            │
-                                  < - - - - - - - - - -Payment CHARGED - - - - - - - - - - - |
-     │                            │                           │                             │                            │
-                                  |------------------------------------------generate()------------------------------->
-     │                            │                           │                             │                            │
-                                  < - - - - - - - - - - - - - - - - -ShippingFailedException - - - - - - - - - - - - -|
-     │                            │                           │                             │                            │
-                                  |---------------------------refund()  [compensa #1]-------->
-     │                            │                           │                             │                            │
-                                  < - - - - - - - - - -ok - - - - - - - - - - - - - - - - - -|
-     │                            │                           │                             │                            │
-                                  |--release()  [compensa #2]->
-     │                            │                           │                             │                            │
-                                  < - - - - - -ok - - - - - - |
-     │                            │                           │                             │                            │
-     < - -409 Shipping failed- - -|
-     │                            │                           │                             │                            │
+  Gateway              Checkout              Payments              Shipping              Inventory              Orders
+     │                    │                     │                     │                     │                    │
+     |-POST /callback {approved:true}-------------------------------------------------------------------------->|
+                         |<---------------------------------------------handlePaymentResult(id, true)
+                         |------------------confirm()----->
+                         < - - -Payment CHARGED- - - - - -|
+                         |------------------------------------generate()------------>
+                         < - - - - - - - - - - - -ShippingFailedException- - - - - -|
+                         |--refund()  [compensa pago]----->
+                         < - - -ok- - - - - - - - - - - - |
+                         |------------------------------------------------release()  [compensa stock]---------->
+                         < - - - - - - - - - - - - - - - - - - - - - - - - -ok- - - - - - - - - - - - - - - - -|
+                         |---------------------------------------------------------------------cancel(orderId)---------------->
+                         < - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -Order CANCELLED- - - - - - - -|
+     < -200 (ack)- - - - |
 ```
-
-Nota: no hay reintento acá — a diferencia de `main`, donde `GenerateShipping` reintenta con
-backoff antes de rendirse (paso "pivote"), en esta rama cualquier fallo compensa de inmediato.
 
 ## 6. Tabla: paso → compensación
 
-| # | `SagaStep` | Paquete | `execute()` llama a | `compensate()` llama a |
+| Fase | Paso | Paquete | Llama a | Compensación |
 |---|---|---|---|---|
-| 1 | `ReserveStockStep` | `inventory.application` | `inventoryService.reserve(productId, qty)` | `inventoryService.release(productId, qty)` |
-| 2 | `ChargePaymentStep` | `payments.application` | `paymentService.charge(...)` | `paymentService.refund(payment)` |
-| 3 | `GenerateShippingStep` | `shipping.application` | `shippingService.generate(productId)` | `shippingService.cancel(shipment)` |
-| 4 | `CreateOrderStep` | `orders.application` | `orderService.create(...)` (nace `CONFIRMED`) | (ninguna — último paso, nada corre después que pueda fallar) |
+| 1 | `ReserveStockStep` | `inventory.application` | `inventoryService.reserve(productId, qty)` | `inventoryService.release(productId, qty)` (manual, no vía `SagaStep` — es la única acción de fase 1 que puede necesitar deshacerse) |
+| 1 | — (`createPending`) | `orders.application.OrderService` | `orderRepository.save(... PENDING_PAYMENT)` | ninguna directa — si algo posterior de fase 1 falla, la compensación es liberar stock |
+| 1 | — (`initiate`) | `payments.application.PaymentService` | `paymentRepository.save(... PENDING)` | ninguna directa (mismo motivo) |
+| 2 (rechazo) | — | `payments`/`inventory`/`orders` | `reject()` + `release()` + `cancel(orderId)` | — (ya son la compensación) |
+| 2 (aprobado) | `GenerateShippingStep` | `shipping.application` | `shippingService.generate(productId)` | `shippingService.cancel(shipment)` (vía `SagaOrchestrator`, si algo posterior falla) |
+| 2 (aprobado) | `ConfirmOrderStep` | `orders.application` | `orderService.confirm(orderId)` | ninguna — último paso del sub-saga |
+| 2 (aprobado, si el sub-saga falla) | — | `checkout.application.CheckoutUseCase` | — | `paymentService.refund(charged)` + `inventoryService.release(...)` + `orderService.cancel(orderId)`, fuera del `SagaOrchestrator` porque esos dos pasos ya se habían resuelto en fase 1 |
 
-Cada `*Step` es un adaptador chico (no un bean de Spring — carga estado por-request) que delega
-en el `*Service` de su dominio y guarda el resultado en un campo para que `compensate()` lo use
-después. `CheckoutUseCase.checkout()` arma estos 4 objetos en orden en un `List<SagaStep>` y se
-lo pasa a `SagaOrchestrator.run(steps)`, que es donde vive la mecánica LIFO en sí: empuja cada
-paso a un `Deque` apenas su `execute()` tiene éxito; si cualquiera lanza `RuntimeException`,
-corre `compensate()` sobre ese deque (LIFO — el más reciente primero) y re-lanza la excepción
-original, que `CheckoutExceptionHandler` mapea a `409`. El paso que falló nunca se agrega al
-deque, así que nunca se compensa a sí mismo (ver el trace de `GenerateShippingStep` fallando en
-el caso C, §5: se compensan `ChargePaymentStep` y `ReserveStockStep` — los dos que sí habían
-tenido éxito — nunca `GenerateShippingStep` mismo).
-
-`SagaOrchestrator` no sabe nada de checkout específicamente — serviría para cualquier lista de
-`SagaStep`, no solo esta. La definición de *qué* pasos y en qué orden vive únicamente en
-`CheckoutUseCase`.
-
-Fuente única de este archivo: `src/main/java/com/saga/checkout/orchestrator/SagaOrchestrator.java`
-(mecánica LIFO) y `src/main/java/com/saga/checkout/application/CheckoutUseCase.java` (los pasos
-y su orden).
+Fuente única de este archivo: `orchestrator/.../SagaOrchestrator.java` (mecánica LIFO del sub-saga
+de fase 2) y `checkout/.../CheckoutUseCase.java` (las dos fases y su orquestación).

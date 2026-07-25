@@ -3,11 +3,16 @@ WORKDIR /app
 COPY gradlew .
 COPY gradle gradle
 COPY settings.gradle build.gradle ./
-COPY src src
-RUN ./gradlew bootJar --no-daemon -x test
+COPY orchestrator orchestrator
+COPY orders orders
+COPY inventory inventory
+COPY payments payments
+COPY shipping shipping
+COPY checkout checkout
+RUN ./gradlew :checkout:bootJar --no-daemon -x test
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY --from=build /app/build/libs/*.jar app.jar
+COPY --from=build /app/checkout/build/libs/*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
