@@ -1,4 +1,9 @@
 services:
+  nats:
+    image: nats:2-alpine
+    ports:
+      - "4222:4222"
+
   mariadb:
     image: mariadb:11
     environment:

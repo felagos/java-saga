@@ -4,4 +4,7 @@ plugins {
 
 dependencies {
     api 'org.springframework.boot:spring-boot-starter'
+    api 'org.springframework.boot:spring-boot-starter-data-jpa'
+    api 'io.nats:jnats:2.20.4'
+    api 'com.fasterxml.jackson.core:jackson-databind'
 }

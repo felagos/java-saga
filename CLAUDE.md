@@ -5,97 +5,115 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is (branch `monolith-async-payment`)
 
 This branch takes the `monolith` branch (SAGA pattern with explicit LIFO compensation, running
-in-process — no NATS/Outbox/idempotency, see `main` for the distributed version) and makes payment
-genuinely asynchronous: the gateway confirms the charge hours later via callback, not in the same
-HTTP request. Every other step (stock, shipping, order confirmation) is still synchronous, direct
-Java method calls. The async boundary is modeled as **two independent HTTP requests**
-(`POST /checkout` and `POST /payments/{id}/callback`) — not threads, executors, or messaging.
-There is still no NATS/Outbox here; don't reintroduce them for this either, the two-request split
-is enough.
+in-process) and makes payment genuinely asynchronous: the gateway resolves the charge off-band, not
+in the same HTTP request. Unlike the first iteration of this branch (two independent HTTP requests),
+the async boundary is now modeled with **NATS**: `POST /checkout` publishes a
+`saga.payment.initiated` event and returns immediately; every step after that (payment resolution,
+shipping, order confirmation, and all compensations) is a **choreography** — each module owns a NATS
+listener that reacts to the event it cares about and publishes the next one. There is no central
+orchestrator driving phase 2 anymore, and no manual callback endpoint. Every step (success or
+compensation) is written to a `saga_audit_log` table for later auditing.
 
 ## Commands
 
 ```bash
-make up                       # docker compose -f docker-compose.full.yml up -d --build (mariadb + bff)
-make infra-up                 # mariadb only, for local bootRun
+make up                       # docker compose -f docker-compose.full.yml up -d --build (nats + mariadb + bff)
+make infra-up                 # nats + mariadb only, for local bootRun
 
 ./gradlew compileJava
 ./gradlew test
 ./gradlew bootRun             # runs the checkout module (the only executable one)
 ```
 
-Multi-module Gradle build, one module per saga step: `orchestrator` (generic `SagaStep`/
-`SagaOrchestrator`, no domain knowledge), `orders`, `inventory`, `payments`, `shipping` (each a
-`java-library`), and `checkout` (the only `org.springframework.boot` module — web layer, use case,
-`CheckoutApplication`). `settings.gradle` lists them all. The Docker Compose service is still named
-`bff`.
+Multi-module Gradle build, one module per saga step: `shared` (generic messaging: NATS connection,
+event records, `SagaEventPublisher`/`SagaEventSubscriber`, and the `SagaAuditService` — no domain
+knowledge), `orders`, `inventory`, `payments`, `shipping` (each a `java-library`), and `checkout`
+(the only `org.springframework.boot` module — web layer, phase-1 use case, `CheckoutApplication`).
+`settings.gradle` lists them all. The Docker Compose service is still named `bff`.
 
 ## Architecture
 
 Same hexagonal shape per module as `monolith` (`domain/application/infrastructure/persistence/
 entity`), just physically split so each domain is its own Gradle subproject instead of a package
-under one project. `checkout` depends on the other four plus `orchestrator`; nothing depends on
-`checkout` (avoids a cycle, since `orders`/`inventory`/`payments`/`shipping` all implement
-`SagaStep`, which lives in `orchestrator`, not in `checkout`).
+under one project. `checkout` depends on the other four plus `shared`; nothing depends on
+`checkout`. `orders`/`inventory`/`payments`/`shipping` don't depend on each other — they only
+depend on `shared`, and coordinate exclusively through NATS events, never through direct calls or
+shared repositories.
 
-- `orchestrator/.../SagaStep.java` / `SagaOrchestrator.java` — unchanged from `monolith`:
-  `execute()`/`compensate()` contract, LIFO compensation on `RuntimeException`. Still has no domain
-  knowledge; still generic over any `List<SagaStep>`, used for **two separate sub-sagas** now (see
-  below), not one.
-- `checkout/application/CheckoutUseCase.java` — defines the saga, now split across the async
-  boundary:
-  - **Phase 1, `checkout(...)`** (synchronous, called from `POST /checkout`): `ReserveStockStep`
-    runs directly (not through the orchestrator — it's the only step in this phase, nothing to
-    compensate but itself if what follows fails). Then `OrderService.createPending(...)` creates
-    the order as `PENDING_PAYMENT`, and `PaymentService.initiate(...)` hands the charge to the
-    gateway and returns immediately with a `PENDING` `Payment` — no exception, no decision yet. If
-    order-creation or payment-initiation blow up, `reserveStock.compensate()` releases the stock
-    before rethrowing. Returns a `CheckoutInitiation` (orderId + paymentId + `PENDING_PAYMENT`).
-  - **Phase 2, `handlePaymentResult(paymentId, approved)`** (called from the payment callback,
-    hours later, no relation to the original HTTP request/thread): loads `Payment` and `Order` by
-    id (that's the only "saga state" needed to resume — no separate saga-state table). If
-    `!approved`: reject the payment, release the stock, cancel the order — done, nobody is waiting
-    on this over HTTP except the gateway's own webhook call. If `approved`: confirm the payment,
-    then run `SagaOrchestrator.run(List.of(GenerateShippingStep, ConfirmOrderStep))` — a 2-step
-    sub-saga reusing the same LIFO engine. If *that* fails, the failure is outside what the
-    orchestrator's deque covers (payment + stock aren't in that list), so `CheckoutUseCase` itself
-    compensates them: refund the payment, release the stock, cancel the order.
-  - `ConfirmOrderStep` (`orders/application/`) transitions `PENDING_PAYMENT → CONFIRMED`; like the
-    old `CreateOrderStep` on `monolith`, it's the last step in its sub-saga so `compensate()` is a
-    no-op. There is no `ChargePaymentStep` anymore — charging can't complete inside `execute()`
-    when the result isn't known until the callback, so phase 1 calls `PaymentService.initiate(...)`
-    directly instead of going through a `SagaStep`.
-- `checkout/web/CheckoutController.java` — `POST /checkout` now returns **202 Accepted** with
-  `{orderId, paymentId, status: "PENDING_PAYMENT"}`, not the final result.
-- `checkout/web/PaymentCallbackController.java` — `POST /payments/{id}/callback {approved}`
-  simulates the gateway's webhook (there's no real gateway in this branch; call it manually or from
-  a test). Delegates straight to `handlePaymentResult`.
-- `checkout/web/OrderController.java` — `GET /orders/{id}`, needed now that the client can't learn
-  the final state from the `/checkout` response alone.
-- `checkout/web/CheckoutExceptionHandler.java` — `InsufficientStockException`/
-  `ShippingFailedException` → 409 (only reachable from phase 1's synchronous stock check now,
-  since shipping failures in phase 2 are compensated internally with no HTTP caller to report to);
-  `IllegalStateException` (unknown order/payment id) → 404.
-- Each domain's `application/*Service` — `OrderService` gained `createPending`, `confirm`,
-  `cancel`, `findById`; `PaymentService` replaced `charge` with `initiate`, `confirm`, `reject`
-  (kept `refund`). Both repository ports (`OrderRepository`, `PaymentRepository`) gained
-  `findById`, implemented in the adapters via the existing find-by-id-and-mutate-the-managed-entity
-  pattern.
-- `OrderStatus` gained `PENDING_PAYMENT` and `CANCELLED` (was just `CONFIRMED`); `PaymentStatus`
-  gained `PENDING` and `REJECTED` (was `CHARGED`/`REFUNDED`). `Payment` gained an `orderId` field —
-  that's the link phase 2 uses to go from a callback's paymentId to the order it belongs to.
+There is no `SagaStep`/`SagaOrchestrator` anymore — a LIFO in-process compensator doesn't fit a flow
+that spans independent listeners reacting to messages. Compensation is distributed: whichever
+modules need to undo their own step each subscribe to the relevant failure event and do it
+themselves.
+
+- `checkout/application/CheckoutUseCase.java` — **phase 1 only**, synchronous, called from
+  `POST /checkout`: reserve stock (`InventoryService.reserve`, inline — no `SagaStep` wrapper
+  anymore), `OrderService.createPending(...)` creates the order as `PENDING_PAYMENT`,
+  `PaymentService.initiate(...)` creates a `PENDING` `Payment`, then publishes
+  `saga.payment.initiated` (`shared/.../events/PaymentInitiatedEvent`) via `SagaEventPublisher`. If
+  order-creation or payment-initiation blow up, stock is released before rethrowing as
+  `CheckoutInitiationException`. Returns a `CheckoutInitiation` (orderId + paymentId +
+  `PENDING_PAYMENT`). Nothing in this class waits for or drives what happens after that publish.
+- **The choreography** (`shared/.../events/SagaSubjects.java` has the full list of subjects):
+  - `payments` — `PaymentInitiatedListener` subscribes `saga.payment.initiated`, simulates the
+    gateway's decision (`payments.simulate.reject`, back after being removed in the previous
+    iteration — there's no real gateway here), then `confirm`/`reject`s the payment and publishes
+    `saga.payment.approved` or `saga.payment.rejected`. `ShippingFailedRefundListener` subscribes
+    `saga.shipping.failed` and refunds the payment (compensation).
+  - `inventory` — `ReleaseStockListener` subscribes both `saga.payment.rejected` and
+    `saga.shipping.failed`, releases the reserved stock either way (compensation).
+  - `orders` — `CancelOrderListener` subscribes both `saga.payment.rejected` and
+    `saga.shipping.failed`, cancels the order (compensation). `ConfirmOrderListener` subscribes
+    `saga.shipping.generated`, confirms the order (`PENDING_PAYMENT → CONFIRMED`), publishes
+    `saga.order.confirmed` (terminal, audit only).
+  - `shipping` — `PaymentApprovedListener` subscribes `saga.payment.approved`, generates the
+    shipment; on success publishes `saga.shipping.generated`, on `ShippingFailedException` publishes
+    `saga.shipping.failed` instead.
+  - Every listener writes a row to `saga_audit_log` (via `shared/.../audit/SagaAuditService`) after
+    acting, whether it succeeded or compensated.
+- `checkout/web/CheckoutController.java` — `POST /checkout` returns **202 Accepted** with
+  `{orderId, paymentId, status: "PENDING_PAYMENT"}`, not the final result. There is no
+  `PaymentCallbackController` anymore — nothing external triggers phase 2, the gateway simulation
+  lives inside `payments`' own NATS listener.
+- `checkout/web/OrderController.java` — `GET /orders/{id}`, the only way a client learns the final
+  state; more necessary than ever since there's no callback and no synchronous final response.
+- `checkout/web/CheckoutExceptionHandler.java` — `InsufficientStockException` (409, from phase 1's
+  synchronous stock check) and `CheckoutInitiationException` (500, phase 1 order/payment creation
+  failure) map to HTTP. `NotFoundException` (`shared/.../exceptions`, the common base for
+  `OrderNotFoundException`/`PaymentNotFoundException`/etc.) → 404. `ShippingFailedException` is
+  never thrown synchronously anymore — it only happens inside `shipping`'s async listener, where
+  there's no HTTP caller to report to.
+- `shared/.../messaging/` — `NatsConfig` (single `Connection` bean, `nats.url` property),
+  `SagaEventPublisher.publish(subject, event)` (JSON via Jackson), `SagaEventSubscriber.subscribe(
+  subject, EventClass, handler)` (wraps `Connection.createDispatcher`, deserializes, calls the
+  handler). Every listener class follows the same shape: constructor-inject the subscriber +
+  publisher + its module's `*Service` + `SagaAuditService`, subscribe in a `@PostConstruct` method,
+  act on the event, publish the next one and/or record an audit row.
+- `shared/.../audit/` — `SagaAuditLogEntity` (table `saga_audit_log`: `orderId`, `step`, `outcome`
+  [`SUCCESS`/`FAILED`/`COMPENSATED`], `detail`, `createdAt`), `SagaAuditService.record(...)`. Table
+  is created by Hibernate (`ddl-auto: update`), same as every other entity in this codebase.
+- Each domain's `application/*Service` — unchanged signatures from the previous iteration:
+  `OrderService` (`createPending`, `confirm`, `cancel`, `findById`), `PaymentService` (`initiate`,
+  `confirm`, `reject`, `refund`, `findById`).
+- `OrderStatus` (`PENDING_PAYMENT`, `CONFIRMED`, `CANCELLED`); `PaymentStatus` (`PENDING`,
+  `CHARGED`, `REJECTED`, `REFUNDED`). `Payment.orderId` is what every listener uses to correlate
+  events back to the order — there's no separate "saga id", `orderId` already is one.
 
 ### Config-driven failure simulation
 
-`payments.simulate.reject` is gone — payment outcome is no longer decided synchronously by config,
-it's whatever `approved` the callback passes. `shipping.simulate.fail` (bool) is unchanged:
-`ShippingService.generate` throws `ShippingFailedException` during phase 2's sub-saga.
+`payments.simulate.reject` (bool) — `PaymentInitiatedListener` rejects instead of confirming.
+`shipping.simulate.fail` (bool) — `ShippingService.generate` throws `ShippingFailedException`,
+caught by `PaymentApprovedListener`, which publishes `saga.shipping.failed` instead of
+`saga.shipping.generated`.
 
 ### Adding a new step to the checkout
 
-If it belongs in phase 1 (before payment is even initiated) or as part of the phase-2 sub-saga
-(after payment is confirmed), same recipe as `monolith`: domain package with a forward + optional
-compensation method on its `*Service`, a `SagaStep` implementation in that package's
-`application/`, wired into the relevant `List.of(...)` in `CheckoutUseCase`. A step that itself
-needs to wait on an external async result (like payment) doesn't fit the `SagaStep` contract —
-follow the `initiate`/`handle*Result` split instead, not a `SagaStep`.
+If it belongs in phase 1 (before payment is even initiated), same recipe as before: a method on the
+relevant `*Service`, called directly from `CheckoutUseCase.checkout(...)`, with inline compensation
+in its `catch` block if something later in phase 1 fails.
+
+If it belongs after payment is initiated: add a domain method on its `*Service`, a new `@Component
+*Listener` in that module's `application/` package that subscribes to whichever event should trigger
+it (add a new constant to `SagaSubjects` if none fits), and — if anything downstream can still
+fail — publish a new event (add a new record to `shared/.../events/`) so the modules that need to
+compensate can subscribe to it. Always call `SagaAuditService.record(...)` after acting, success or
+compensation, so the step shows up in `saga_audit_log`.

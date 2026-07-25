@@ -16,10 +16,17 @@ spring:
       hibernate:
         format_sql: true
 
+nats:
+  url: nats://localhost:4222
+
 inventory:
   seed:
     product-id: sku-1
     initial-stock: 100
+
+payments:
+  simulate:
+    reject: false
 
 shipping:
   simulate:

@@ -4,16 +4,15 @@ import com.saga.checkout.exceptions.CheckoutInitiationException;
 import com.saga.checkout.web.dto.ErrorResponse;
 import com.saga.inventory.exceptions.InsufficientStockException;
 import com.saga.shared.exceptions.NotFoundException;
-import com.saga.shipping.exceptions.ShippingFailedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * InsufficientStock/ShippingFailed only ever reach here from the synchronous phase-1 stock check —
- * everything past that point (payment, shipping, order confirmation) is compensated internally by
- * CheckoutUseCase.handlePaymentResult, with no HTTP caller left to report to.
+ * InsufficientStock only ever reaches here from the synchronous phase-1 stock check — everything
+ * past that point (payment, shipping, order confirmation) is choreographed via NATS listeners, with
+ * no HTTP caller left to report to.
  */
 @RestControllerAdvice
 public class CheckoutExceptionHandler {
@@ -21,12 +20,6 @@ public class CheckoutExceptionHandler {
     @ExceptionHandler(InsufficientStockException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ErrorResponse handleInsufficientStock(InsufficientStockException e) {
-        return new ErrorResponse(e.getMessage());
-    }
-
-    @ExceptionHandler(ShippingFailedException.class)
-    @ResponseStatus(HttpStatus.CONFLICT)
-    public ErrorResponse handleShippingFailed(ShippingFailedException e) {
         return new ErrorResponse(e.getMessage());
     }
 

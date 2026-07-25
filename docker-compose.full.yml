@@ -1,4 +1,9 @@
 services:
+  nats:
+    image: nats:2-alpine
+    ports:
+      - "4222:4222"
+
   mariadb:
     image: mariadb:11
     environment:
@@ -19,11 +24,14 @@ services:
     build: .
     environment:
       SPRING_DATASOURCE_URL: jdbc:mariadb://mariadb:3306/monolith
+      NATS_URL: nats://nats:4222
     ports:
       - "8080:8080"
     depends_on:
       mariadb:
         condition: service_healthy
+      nats:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
