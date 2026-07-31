@@ -4,6 +4,8 @@ import com.saga.inventory.application.InventoryService;
 import com.saga.inventory.application.ReserveStockStep;
 import com.saga.checkout.orchestrator.SagaOrchestrator;
 import com.saga.checkout.orchestrator.SagaStep;
+import com.saga.loyalty.application.EarnLoyaltyPointsStep;
+import com.saga.loyalty.application.LoyaltyService;
 import com.saga.orders.application.CreateOrderStep;
 import com.saga.orders.application.OrderService;
 import com.saga.orders.domain.Order;
@@ -25,15 +27,17 @@ public class CheckoutUseCase {
     private final OrderService orderService;
     private final InventoryService inventoryService;
     private final PaymentService paymentService;
+    private final LoyaltyService loyaltyService;
     private final ShippingService shippingService;
     private final SagaOrchestrator sagaOrchestrator;
 
     public CheckoutUseCase(OrderService orderService, InventoryService inventoryService,
-                            PaymentService paymentService,
+                            PaymentService paymentService, LoyaltyService loyaltyService,
                             ShippingService shippingService, SagaOrchestrator sagaOrchestrator) {
         this.orderService = orderService;
         this.inventoryService = inventoryService;
         this.paymentService = paymentService;
+        this.loyaltyService = loyaltyService;
         this.shippingService = shippingService;
         this.sagaOrchestrator = sagaOrchestrator;
     }
@@ -43,6 +47,7 @@ public class CheckoutUseCase {
         List<SagaStep> steps = List.of(
                 new ReserveStockStep(inventoryService, productId, quantity),
                 new ChargePaymentStep(paymentService, customerId, amount),
+                new EarnLoyaltyPointsStep(loyaltyService, customerId, amount),
                 new GenerateShippingStep(shippingService, productId),
                 createOrder
         );

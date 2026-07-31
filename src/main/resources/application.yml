@@ -29,6 +29,9 @@ shipping:
   simulate:
     fail: false
 
+loyalty:
+  points-per-currency-unit: 100.0
+
 logging:
   level:
     com.saga.checkout: INFO
