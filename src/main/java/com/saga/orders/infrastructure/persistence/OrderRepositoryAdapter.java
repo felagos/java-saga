@@ -5,6 +5,8 @@ import com.saga.orders.domain.OrderRepository;
 import com.saga.orders.infrastructure.persistence.entity.OrderEntity;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
+
 @Component
 public class OrderRepositoryAdapter implements OrderRepository {
 
@@ -26,5 +28,10 @@ public class OrderRepositoryAdapter implements OrderRepository {
                 .orElseThrow(() -> new IllegalStateException("Order not found: " + order.id()));
         entity.setStatus(order.status());
         return mapper.toDomain(entity);
+    }
+
+    @Override
+    public Optional<Order> findById(Long id) {
+        return jpaRepository.findById(id).map(mapper::toDomain);
     }
 }
