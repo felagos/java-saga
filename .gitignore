@@ -3,3 +3,5 @@ build/
 *.log
 .idea/
 .trees/
+.claude/settings*.json
+graphify-out
