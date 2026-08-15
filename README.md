@@ -33,12 +33,17 @@ src/main/java/com/saga/
 ├── checkout/
 │   ├── application/CheckoutUseCase.java   orquestador único: pasos + pila de compensaciones LIFO
 │   ├── orchestrator/                      SagaStep, SagaOrchestrator (motor genérico de saga)
-│   └── web/                               CheckoutController, DTOs, manejador de excepciones
+│   └── web/                               CheckoutController, OrderController, DTOs, manejador de excepciones
 ├── orders/      {domain, application, infrastructure/persistence}
 ├── inventory/   {domain, application, infrastructure/persistence}
 ├── payments/    {domain, application, infrastructure/persistence}
-└── shipping/    {domain, application, infrastructure/persistence}
+├── shipping/    {domain, application, infrastructure/persistence}
+└── loyalty/     {domain, application, infrastructure/persistence}
 ```
+
+Pasos del checkout, en orden: `ReserveStockStep` → `ChargePaymentStep` →
+`EarnLoyaltyPointsStep` → `GenerateShippingStep` → `CreateOrderStep` (último: el pedido nace
+`CONFIRMED`, así que si algo anterior falla nunca llega a existir).
 
 ## Quick start
 
@@ -50,6 +55,9 @@ make up      # build + levanta MariaDB y bff
 curl -s -X POST localhost:8080/checkout -H "Content-Type: application/json" \
   -d '{"customerId":"cust-1","productId":"sku-1","quantity":1,"amount":100.0}'
 # -> 200 { "orderId": 1, "status": "CONFIRMED" }
+
+curl -s localhost:8080/orders/1
+# -> 200 { "id": 1, "customerId": "cust-1", ..., "status": "CONFIRMED" }
 ```
 
 Diagramas de todos los flujos (happy path + los 3 casos de fallo, con la cadena de compensación
