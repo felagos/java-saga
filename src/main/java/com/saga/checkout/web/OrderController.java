@@ -1,5 +1,6 @@
 package com.saga.checkout.web;
 
+import com.saga.checkout.web.dto.OrderResponseDTO;
 import com.saga.orders.domain.OrderRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,9 +19,9 @@ public class OrderController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<OrderResponse> getOrder(@PathVariable Long id) {
+    public ResponseEntity<OrderResponseDTO> getOrder(@PathVariable Long id) {
         return orderRepository.findById(id)
-                .map(order -> ResponseEntity.ok(new OrderResponse(order.id(), order.customerId(), order.productId(),
+                .map(order -> ResponseEntity.ok(new OrderResponseDTO(order.id(), order.customerId(), order.productId(),
                         order.quantity(), order.amount(), order.status().name())))
                 .orElse(ResponseEntity.notFound().build());
     }

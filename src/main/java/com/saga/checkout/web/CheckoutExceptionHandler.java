@@ -1,5 +1,6 @@
 package com.saga.checkout.web;
 
+import com.saga.checkout.web.dto.ErrorResponseDTO;
 import com.saga.inventory.domain.InsufficientStockException;
 import com.saga.payments.domain.PaymentRejectedException;
 import com.saga.shipping.domain.ShippingFailedException;
@@ -20,25 +21,25 @@ public class CheckoutExceptionHandler {
 
     @ExceptionHandler(InsufficientStockException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    public ErrorResponse handleInsufficientStock(InsufficientStockException e) {
-        return new ErrorResponse(e.getMessage());
+    public ErrorResponseDTO handleInsufficientStock(InsufficientStockException e) {
+        return new ErrorResponseDTO(e.getMessage());
     }
 
     @ExceptionHandler(PaymentRejectedException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    public ErrorResponse handlePaymentRejected(PaymentRejectedException e) {
-        return new ErrorResponse(e.getMessage());
+    public ErrorResponseDTO handlePaymentRejected(PaymentRejectedException e) {
+        return new ErrorResponseDTO(e.getMessage());
     }
 
     @ExceptionHandler(ShippingFailedException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    public ErrorResponse handleShippingFailed(ShippingFailedException e) {
-        return new ErrorResponse(e.getMessage());
+    public ErrorResponseDTO handleShippingFailed(ShippingFailedException e) {
+        return new ErrorResponseDTO(e.getMessage());
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    public ErrorResponse handleConcurrentUpdate(OptimisticLockingFailureException e) {
-        return new ErrorResponse("Concurrent update conflict, please retry");
+    public ErrorResponseDTO handleConcurrentUpdate(OptimisticLockingFailureException e) {
+        return new ErrorResponseDTO("Concurrent update conflict, please retry");
     }
 }

@@ -1,6 +1,8 @@
 package com.saga.checkout.web;
 
 import com.saga.checkout.application.CheckoutUseCase;
+import com.saga.checkout.web.dto.CheckoutRequestDTO;
+import com.saga.checkout.web.dto.CheckoutResponseDTO;
 import com.saga.orders.domain.Order;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,9 +19,9 @@ public class CheckoutController {
     }
 
     @PostMapping("/checkout")
-    public CheckoutResponse checkout(@Valid @RequestBody CheckoutRequest request) {
+    public CheckoutResponseDTO checkout(@Valid @RequestBody CheckoutRequestDTO request) {
         Order order = checkoutUseCase.checkout(request.customerId(), request.productId(), request.quantity(),
                 request.amount());
-        return new CheckoutResponse(order.id(), order.status().name());
+        return new CheckoutResponseDTO(order.id(), order.status().name());
     }
 }

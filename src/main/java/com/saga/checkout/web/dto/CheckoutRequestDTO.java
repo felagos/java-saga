@@ -1,9 +1,9 @@
-package com.saga.checkout.web;
+package com.saga.checkout.web.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 
-public record CheckoutRequest(
+public record CheckoutRequestDTO(
         @NotBlank String customerId,
         @NotBlank String productId,
         @Positive int quantity,
