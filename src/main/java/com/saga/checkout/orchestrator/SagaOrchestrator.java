@@ -22,7 +22,13 @@ public class SagaOrchestrator {
                 executed.push(step);
             }
         } catch (RuntimeException e) {
-            executed.forEach(SagaStep::compensate);
+            for (SagaStep step : executed) {
+                try {
+                    step.compensate();
+                } catch (RuntimeException compensationFailure) {
+                    e.addSuppressed(compensationFailure);
+                }
+            }
             throw e;
         }
     }

@@ -6,6 +6,7 @@ import com.saga.payments.domain.PaymentRepository;
 import com.saga.payments.domain.PaymentStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class PaymentService {
@@ -19,6 +20,7 @@ public class PaymentService {
         this.paymentRepository = paymentRepository;
     }
 
+    @Transactional
     public Payment charge(String customerId, double amount) {
         if (simulateReject) {
             throw new PaymentRejectedException(customerId);
@@ -26,6 +28,7 @@ public class PaymentService {
         return paymentRepository.save(new Payment(null, customerId, amount, PaymentStatus.CHARGED));
     }
 
+    @Transactional
     public void refund(Payment payment) {
         paymentRepository.save(payment.withStatus(PaymentStatus.REFUNDED));
     }

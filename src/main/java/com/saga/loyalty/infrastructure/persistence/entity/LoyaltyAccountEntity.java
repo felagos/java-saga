@@ -3,6 +3,7 @@ package com.saga.loyalty.infrastructure.persistence.entity;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 @Entity
 @Table(name = "loyalty_account")
@@ -12,6 +13,9 @@ public class LoyaltyAccountEntity {
     private String customerId;
 
     private long points;
+
+    @Version
+    private long version;
 
     protected LoyaltyAccountEntity() {
     }

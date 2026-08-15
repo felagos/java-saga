@@ -3,15 +3,17 @@ package com.saga.checkout.web;
 import com.saga.inventory.domain.InsufficientStockException;
 import com.saga.payments.domain.PaymentRejectedException;
 import com.saga.shipping.domain.ShippingFailedException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * Every domain exception here means the checkout transaction already rolled back (see
- * CheckoutUseCase) — nothing was persisted for this request. Unlike the microservices version,
- * there is no compensation to run: the client gets the failure reason in the same HTTP response.
+ * Each step commits its own local transaction (see CLAUDE.md); a step that throws here has
+ * already had SagaOrchestrator run compensation for every step that succeeded before it, so
+ * nothing from this request is left applied. The client gets the failure reason in the same
+ * HTTP response.
  */
 @RestControllerAdvice
 public class CheckoutExceptionHandler {
@@ -32,5 +34,11 @@ public class CheckoutExceptionHandler {
     @ResponseStatus(HttpStatus.CONFLICT)
     public ErrorResponse handleShippingFailed(ShippingFailedException e) {
         return new ErrorResponse(e.getMessage());
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorResponse handleConcurrentUpdate(OptimisticLockingFailureException e) {
+        return new ErrorResponse("Concurrent update conflict, please retry");
     }
 }

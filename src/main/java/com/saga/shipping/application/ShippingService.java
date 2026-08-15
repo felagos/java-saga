@@ -6,6 +6,7 @@ import com.saga.shipping.domain.ShipmentStatus;
 import com.saga.shipping.domain.ShippingFailedException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class ShippingService {
@@ -19,6 +20,7 @@ public class ShippingService {
         this.shipmentRepository = shipmentRepository;
     }
 
+    @Transactional
     public Shipment generate(String productId) {
         if (simulateFail) {
             throw new ShippingFailedException(productId);
@@ -26,6 +28,7 @@ public class ShippingService {
         return shipmentRepository.save(new Shipment(null, productId, ShipmentStatus.GENERATED));
     }
 
+    @Transactional
     public void cancel(Shipment shipment) {
         shipmentRepository.save(shipment.withStatus(ShipmentStatus.CANCELLED));
     }

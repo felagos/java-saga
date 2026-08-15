@@ -4,6 +4,7 @@ import com.saga.orders.domain.Order;
 import com.saga.orders.domain.OrderRepository;
 import com.saga.orders.domain.OrderStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class OrderService {
@@ -14,6 +15,7 @@ public class OrderService {
         this.orderRepository = orderRepository;
     }
 
+    @Transactional
     public Order create(String customerId, String productId, int quantity, double amount) {
         return orderRepository.save(new Order(null, customerId, productId, quantity, amount, OrderStatus.CONFIRMED));
     }

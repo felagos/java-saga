@@ -4,6 +4,7 @@ import com.saga.loyalty.domain.LoyaltyAccount;
 import com.saga.loyalty.domain.LoyaltyAccountRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class LoyaltyService {
@@ -17,15 +18,17 @@ public class LoyaltyService {
         this.pointsPerCurrencyUnit = pointsPerCurrencyUnit;
     }
 
+    @Transactional
     public LoyaltyAccount earnPoints(String customerId, double amount) {
         long earnedPoints = calculatePoints(amount);
         LoyaltyAccount account = loyaltyAccountRepository.findByCustomerId(customerId)
-                .orElse(new LoyaltyAccount(customerId, 0L));
+                .orElseGet(() -> new LoyaltyAccount(customerId, 0L));
         LoyaltyAccount updated = account.earn(earnedPoints);
         loyaltyAccountRepository.save(updated);
         return updated;
     }
 
+    @Transactional
     public void revokePoints(LoyaltyAccount account, long points) {
         loyaltyAccountRepository.save(account.revoke(points));
     }
